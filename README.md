@@ -9,5 +9,5 @@ Clone [official neural compression githab](https://github.com/facebookresearch/N
 To compress particular image open **Metrics_Example.ipynb**, specify **PATH** to the image and **GPU_ID** (index of GPU to use) and run the following command :
 
 ```bash
-!CUDA_VISIBLE_DEVICES=GPU_ID python compress_image.py PATH
+!CUDA_VISIBLE_DEVICES=GPU_ID python compress_image.py --PATH
 ```
