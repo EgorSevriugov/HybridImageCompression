@@ -136,7 +136,9 @@ def opt_rank_tucker(X, f, Y, delta, alpha=None, lamda=1e6, iters=1000, device="c
         alpha = tl.tensor(np.array(X.shape)) / np.sum(np.array(X.shape))
     print(f"Alpha {alpha}")
     Y = Y.to(device)
-        
+    
+    #init all parameters
+    
     Z = [tl.unfold(tl.copy(X),n).to(device) for n in range(len(X.shape))]
     T = [tl.zeros(z.shape).to(device) for z in Z]
     best_rank_sum = sum(tl.tensor(Y.shape) * alpha)
@@ -144,21 +146,33 @@ def opt_rank_tucker(X, f, Y, delta, alpha=None, lamda=1e6, iters=1000, device="c
     X_best = tl.copy(X)
     sum_s = []
     re_xy = []
+    
+    #perform iterations
     pbar = tqdm(range(iters))
     for i in pbar:
+        
+        #Solve Z
         for n in range(len(Z)):
             Z[n] = D_tau(tl.unfold(X,n) - T[n], alpha[n] / lamda)
+            
+        # Solve X
         X, flag = solve_X(X,f,Y,Z,T,delta)
+        
+        # Solve theta
         if flag:
             losses_theta = solve_theta(X,f,Y,500)
         else:
             losses_theta = solve_theta(X,f,Y,10)
+            
+        #Solve T
         for n in range(len(Z)):
             T[n] += Z[n] - tl.unfold(X,n)
         
         nnz = []
         sing_sum = []
         norms = []
+        
+        #Evaluate performance
         for n in range(len(Z)):
             svd_X = torch.svd(tl.unfold(X,n),compute_uv=False)[1]
             sing_sum.append(sum(svd_X) * alpha[n])
@@ -210,10 +224,7 @@ class F(torch.nn.Module):
         self.model = torch.nn.Sequential(
             torch.nn.Conv2d(3,64,kernel_size=ker_size,padding=ker_size // 2, bias=False),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(64,3,kernel_size=ker_size,padding=ker_size // 2, bias=False),
-#             torch.nn.ReLU(),
-#             torch.nn.Conv2d(8,3,kernel_size=ker_size,padding=ker_size // 2, bias=False),
-#             Tanh_normal()
+            torch.nn.Conv2d(64,3,kernel_size=ker_size,padding=ker_size // 2, bias=False)
         )
     def forward(self,X):
         return self.model(X[None])[0]
@@ -249,7 +260,7 @@ def X_init_tucker(X_shape,f,Y,R,device, iters=20000):
     for param in f.parameters():
         param.requires_grad = True
     
-    
+    #optimization of f and tucker components of X
     optimizer = torch.optim.Adam(opt_params + [param for param in f.parameters()], lr=0.0002)
     
     pbar = tqdm(range(iters))
@@ -274,6 +285,7 @@ def X_init_tucker(X_shape,f,Y,R,device, iters=20000):
         param.requires_grad = False
     return best_X.requires_grad_(False), (Y - f(best_X)).norm().item()
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Compression parameters"
@@ -295,17 +307,27 @@ device = "cuda"
 bpp_sum = 0.
 metrics_sum = {'PSNR': 0., 'MeanSquaredError': 0., 'MultiscaleStructuralSimilarity': 0.}
 
+#load Image
 img = tfms.ToTensor()(Image.open(args.PATH))
 X_shape = list(img.shape)
 torch.manual_seed(0)
+
+#initialize f
 f = F(ker_size).to(device)
+
+#first part of dual problem
 X,delta = X_init_tucker(X_shape,f,img.to(device),R,device, iters=10000)
 
+#second part of dual problem
 X = opt_rank_tucker(X.detach(),f,img,delta, lamda=1e0, iters=1000, device=device)
+
+#metrics evaluation
 for k,v in metrics(f(X[0])[None].detach().cpu(),img[None]).items():
     metrics_sum[k] = v.item()
 bpp_sum = (sum([np.prod(param.shape) for param in f.parameters()]) + np.prod(X[1]) + sum(np.array(X[1]) * np.array(X_shape)))*32 / np.prod(img.shape[1:])
-tfms.ToPILImage()((X[0] + (X[0].reshape(3,-1)).min(dim=1)[:,None,None]) / ((X[0].reshape(3,-1)).max(dim=1)[:,None,None] - (X[0].reshape(3,-1)).min(dim=1)[:,None,None])).save("./preimage.png")
+
+#saving compressed image and printing results
+# tfms.ToPILImage()((X[0] + (X[0].reshape(3,-1)).min(dim=1)[:,None,None]) / ((X[0].reshape(3,-1)).max(dim=1)[:,None,None] - (X[0].reshape(3,-1)).min(dim=1)[:,None,None])).save("./preimage.png")
 tfms.ToPILImage()(f(X[0]).detach().cpu().clamp(0,1)).save("./compressed_image.png")
 print("Metrics:")
 print(metrics_sum)
